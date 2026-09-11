@@ -1,59 +1,245 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# WTG Spain Test — Laravel REST API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A small REST API that:
 
-## About Laravel
+- Imports supplier offers asynchronously via a queue.
+- Returns the cheapest currently-valid offer per property.
+- Safely books offers with concurrency protection.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+Built with Laravel 12, MySQL 8, PHP 8.2+.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+Repository: <your-repo-url>
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+---
 
-## Learning Laravel
+## Requirements
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+- PHP 8.2+
+- Composer 2
+- MySQL 8+
+- (Optional) Docker, if you prefer to run MySQL in a container
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+---
 
-## Laravel Sponsors
+## Installation
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+```bash
+git clone <your-repo-url>
+cd wtg-spain-test
 
-### Premium Partners
+composer install
+cp .env.example .env
+php artisan key:generate
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+Create the database:
 
-## Contributing
+```sql
+CREATE DATABASE wtg_spain_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Adjust `DB_*` in `.env` if your MySQL credentials differ from the defaults.
 
-## Code of Conduct
+---
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Running the app
 
-## Security Vulnerabilities
+Run migrations and seed the two required suppliers:
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```bash
+php artisan migrate --seed
+```
+
+Start the HTTP server:
+
+```bash
+php artisan serve
+```
+
+In a separate terminal, start the queue worker (the import job is queued):
+
+```bash
+php artisan queue:work
+```
+
+---
+
+## Testing
+
+Create a separate test database once:
+
+```sql
+CREATE DATABASE wtg_spain_testing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+Run the full test suite:
+
+```bash
+php artisan test
+```
+
+Feature tests live in `tests/Feature/`:
+
+- `ImportTest` — request validation, idempotent re-import, job side effects, status endpoint.
+- `PropertyTest` — cheapest-offer selection, filters, pagination.
+- `ReservationTest` — creation, idempotency, no-units, expiry, validation.
+
+`phpunit.xml` points tests at `wtg_spain_testing` and sets `QUEUE_CONNECTION=sync` so the job runs inline.
+
+---
+
+## API
+
+### `POST /api/imports`
+
+Accepts a supplier import. Returns `202` immediately and processes offers in the background.
+
+```json
+{
+    "supplier": "supplier-a",
+    "external_import_id": "import-2026-09-01-001",
+    "sent_at": "2026-09-01T10:00:00Z",
+    "offers": [
+        {
+            "external_id": "offer-a-10001",
+            "property": {
+                "code": "BCN-0001",
+                "name": "Apartment near Sagrada Familia",
+                "city": "Barcelona"
+            },
+            "check_in": "2026-10-10",
+            "check_out": "2026-10-15",
+            "max_guests": 4,
+            "price": 72500,
+            "currency": "EUR",
+            "available_units": 2,
+            "expires_at": "2026-09-10T23:59:59Z"
+        }
+    ]
+}
+```
+
+Response:
+
+```json
+{ "data": { "id": 15, "status": "pending" } }
+```
+
+### `GET /api/imports/{import}`
+
+Returns the current state of an import.
+
+```json
+{
+    "data": {
+        "id": 15,
+        "supplier": "supplier-a",
+        "external_import_id": "import-2026-09-01-001",
+        "sent_at": "2026-09-01T10:00:00+00:00",
+        "status": "completed",
+        "total_offers": 20,
+        "processed_offers": 20,
+        "error": null,
+        "created_at": "2026-09-01T10:00:02+00:00",
+        "completed_at": "2026-09-01T10:00:04+00:00"
+    }
+}
+```
+
+### `GET /api/properties`
+
+Returns the cheapest valid offer per property.
+
+Query: `city` (optional), `check_in`, `check_out`, `guests`, `page`, `per_page`.
+
+```bash
+curl "http://127.0.0.1:8000/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=2&page=1"
+```
+
+A property is included if its offer matches the dates, has `max_guests >= guests`, has `available_units > 0`, and `expires_at > now()`. The cheapest offer is selected in SQL using a `ROW_NUMBER() OVER (PARTITION BY property ORDER BY price)` window, not by fetching all rows into PHP.
+
+Response:
+
+```json
+{
+    "data": [
+        {
+            "code": "BCN-0001",
+            "name": "Apartment near Sagrada Familia",
+            "city": "Barcelona",
+            "best_offer": {
+                "id": 125,
+                "supplier": "supplier-a",
+                "price": 72500,
+                "currency": "EUR",
+                "available_units": 2,
+                "expires_at": "2026-09-10T23:59:59+00:00"
+            }
+        }
+    ],
+    "next": null,
+    "prev": null,
+    "per_page": 15
+}
+```
+
+### `POST /api/offers/{offer}/reservations`
+
+Creates a reservation for a single offer. Returns `201`.
+
+```json
+{
+    "client_reference": "web-order-9f782b1c",
+    "customer_name": "John Smith",
+    "customer_email": "john@example.com"
+}
+```
+
+---
+
+## Idempotency of imports
+
+Two layers, both enforced by database constraints plus application code:
+
+1. **HTTP layer.** `POST /api/imports` uses `Import::firstOrCreate` on the unique pair `(supplier_id, external_import_id)`. A resend returns the existing row with `202` and the same `id`; no new row is created.
+2. **Job dispatch.** The controller only dispatches `ProcessImport` when `$import->wasRecentlyCreated` is true, so a resend cannot enqueue a second job. The job itself also early-returns if the import is already `completed`.
+
+Offers are upserted with `Offer::updateOrCreate` on the unique pair `(supplier_id, external_id)`. Re-importing an offer updates its price/dates instead of duplicating it. Properties are upserted on `properties.code`.
+
+Reservations use `client_reference` as the natural idempotency key — the same reference sent twice returns the existing reservation and does not decrement `available_units` again.
+
+---
+
+## Concurrency protection for reservations
+
+`POST /api/offers/{offer}/reservations` runs inside `DB::transaction`. Inside the transaction, the offer row is locked with `SELECT ... FOR UPDATE` via Eloquent's `lockForUpdate()`:
+
+```php
+$locked = Offer::whereKey($offer->id)->lockForUpdate()->first();
+```
+
+The first concurrent request acquires an exclusive row lock. Any second request attempting to book the same offer blocks on the same `SELECT` until the first commits. Because the stock check (`available_units < 1`) happens _after_ the lock is acquired, the second transaction sees the already-decremented value and correctly rejects the booking with `422`.
+
+Without this lock, both transactions could read `available_units = 1` and both decrement, overselling the last unit. The row lock serializes them.
+
+Note: this guarantee relies on the storage engine supporting row-level locks (InnoDB in MySQL 8). SQLite treats `lockForUpdate()` as a no-op, which is why tests in this project run against MySQL.
+
+---
+
+## Project structure notes
+
+Standard Laravel layering, no artificial abstractions:
+
+- **Migrations** live in `database/migrations` with foreign keys, unique constraints, and composite indexes for the hot queries.
+- **Models** in `app/Models` with relationships, casts, and status constants.
+- **Form Requests** in `app/Http/Requests` handle validation, including nested offers and search filters.
+- **Controllers** in `app/Http/Controllers/Api` stay thin — persistence, dispatch, and response shaping only.
+- **Business logic** for import processing lives in the queued `App\Jobs\ProcessImport`.
+- **Resources** in `app/Http/Resources` shape the wire format.
+- **Factories and seeders** in `database/factories` and `database/seeders` support both local setup and tests.
+
+---
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+For evaluation purposes only.
