@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreImportRequest;
+use App\Jobs\ProcessImport;
 use App\Models\Import;
 use App\Models\Supplier;
 use Illuminate\Http\JsonResponse;
@@ -21,12 +22,16 @@ class ImportController extends Controller
             ],
             [
                 'sent_at'      => $request->input('sent_at'),
+                'payload'      => ['offers' => $request->input('offers')],
                 'status'       => Import::STATUS_PENDING,
                 'total_offers' => count($request->input('offers')),
             ],
         );
 
-        // Job dispatch happens in Commit 7.
+        // Only dispatch if the row was freshly created.
+        if ($import->wasRecentlyCreated) {
+            ProcessImport::dispatch($import->id);
+        }
 
         return response()->json([
             'data' => [

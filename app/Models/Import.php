@@ -20,6 +20,7 @@ class Import extends Model
         'supplier_id',
         'external_import_id',
         'sent_at',
+        'payload',
         'status',
         'total_offers',
         'processed_offers',
@@ -32,6 +33,7 @@ class Import extends Model
         'completed_at'     => 'datetime',
         'total_offers'     => 'integer',
         'processed_offers' => 'integer',
+        'payload'          => 'array',
     ];
 
     public function supplier(): BelongsTo
