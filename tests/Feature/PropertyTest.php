@@ -18,51 +18,50 @@ class PropertyTest extends TestCase
         $this->seed(\Database\Seeders\SupplierSeeder::class);
     }
 
-    private function makeOffer(array $overrides = []): Offer
+    private function makeProperty(string $code = 'BCN-0001', string $city = 'Barcelona'): Property
     {
-        $property = Property::factory()->create([
-            'code' => $overrides['property_code'] ?? 'BCN-0001',
-            'city' => $overrides['city'] ?? 'Barcelona',
+        return Property::create([
+            'code' => $code,
+            'name' => 'Test Property ' . $code,
+            'city' => $city,
         ]);
+    }
 
-        $supplier = Supplier::where('slug', $overrides['supplier'] ?? 'supplier-a')->first();
+    /**
+     * Supported overrides: supplier, price, max_guests, available_units,
+     *                      expires_at, check_in, check_out
+     */
+    private function makeOffer(Property $property, array $overrides = []): Offer
+    {
+        $supplierSlug = $overrides['supplier'] ?? 'supplier-a';
+        $supplier     = Supplier::where('slug', $supplierSlug)->firstOrFail();
 
-        return Offer::factory()->create(array_merge([
+        unset($overrides['supplier']);
+
+        return Offer::create(array_merge([
             'supplier_id'     => $supplier->id,
             'property_id'     => $property->id,
+            'import_id'       => null,
+            'external_id'     => 'offer-' . uniqid(),
             'check_in'        => '2026-10-10',
             'check_out'       => '2026-10-15',
             'max_guests'      => 4,
             'price'           => 50000,
+            'currency'        => 'EUR',
             'available_units' => 1,
             'expires_at'      => now()->addDays(7),
-        ], array_diff_key($overrides, array_flip([
-            'property_code', 'city', 'supplier',
-        ]))));
+        ], $overrides));
     }
 
     public function test_it_returns_cheapest_offer_per_property(): void
     {
-        $property = Property::factory()->create(['code' => 'BCN-0001', 'city' => 'Barcelona']);
-        $supplierA = Supplier::where('slug', 'supplier-a')->first();
-        $supplierB = Supplier::where('slug', 'supplier-b')->first();
+        $property = $this->makeProperty('BCN-0001', 'Barcelona');
 
-        Offer::factory()->create([
-            'supplier_id' => $supplierA->id, 'property_id' => $property->id,
-            'check_in' => '2026-10-10', 'check_out' => '2026-10-15',
-            'max_guests' => 4, 'price' => 70000, 'available_units' => 1,
-            'expires_at' => now()->addDays(7),
-        ]);
-        Offer::factory()->create([
-            'supplier_id' => $supplierB->id, 'property_id' => $property->id,
-            'check_in' => '2026-10-10', 'check_out' => '2026-10-15',
-            'max_guests' => 4, 'price' => 55000, 'available_units' => 2,
-            'expires_at' => now()->addDays(7),
-        ]);
+        $this->makeOffer($property, ['supplier' => 'supplier-a', 'price' => 70000]);
+        $this->makeOffer($property, ['supplier' => 'supplier-b', 'price' => 55000]);
 
-        $response = $this->getJson('/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=2');
-
-        $response->assertOk()
+        $this->getJson('/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=2')
+            ->assertOk()
             ->assertJsonPath('data.0.code', 'BCN-0001')
             ->assertJsonPath('data.0.best_offer.price', 55000)
             ->assertJsonPath('data.0.best_offer.supplier', 'supplier-b');
@@ -70,7 +69,8 @@ class PropertyTest extends TestCase
 
     public function test_it_excludes_expired_offers(): void
     {
-        $this->makeOffer(['expires_at' => now()->subDay()]);
+        $property = $this->makeProperty();
+        $this->makeOffer($property, ['expires_at' => now()->subDay()]);
 
         $this->getJson('/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=2')
             ->assertOk()
@@ -79,7 +79,8 @@ class PropertyTest extends TestCase
 
     public function test_it_excludes_offers_without_available_units(): void
     {
-        $this->makeOffer(['available_units' => 0]);
+        $property = $this->makeProperty();
+        $this->makeOffer($property, ['available_units' => 0]);
 
         $this->getJson('/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=2')
             ->assertOk()
@@ -88,7 +89,8 @@ class PropertyTest extends TestCase
 
     public function test_it_excludes_offers_below_guest_count(): void
     {
-        $this->makeOffer(['max_guests' => 2]);
+        $property = $this->makeProperty();
+        $this->makeOffer($property, ['max_guests' => 2]);
 
         $this->getJson('/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=4')
             ->assertOk()
@@ -97,8 +99,11 @@ class PropertyTest extends TestCase
 
     public function test_it_filters_by_city(): void
     {
-        $this->makeOffer(['city' => 'Barcelona', 'property_code' => 'BCN-0001']);
-        $this->makeOffer(['city' => 'Madrid',    'property_code' => 'MAD-0001']);
+        $bcn = $this->makeProperty('BCN-0001', 'Barcelona');
+        $mad = $this->makeProperty('MAD-0001', 'Madrid');
+
+        $this->makeOffer($bcn);
+        $this->makeOffer($mad);
 
         $this->getJson('/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=2')
             ->assertOk()
@@ -109,7 +114,8 @@ class PropertyTest extends TestCase
     public function test_pagination_includes_next_prev_per_page(): void
     {
         for ($i = 1; $i <= 5; $i++) {
-            $this->makeOffer(['property_code' => 'BCN-000' . $i]);
+            $property = $this->makeProperty('BCN-000' . $i, 'Barcelona');
+            $this->makeOffer($property);
         }
 
         $this->getJson('/api/properties?city=Barcelona&check_in=2026-10-10&check_out=2026-10-15&guests=2&per_page=2&page=1')

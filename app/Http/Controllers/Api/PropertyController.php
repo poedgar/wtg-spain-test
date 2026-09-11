@@ -11,37 +11,54 @@ class PropertyController extends Controller
 {
     public function index(ListPropertiesRequest $request)
     {
-        $perPage = (int) $request->input('per_page', 15);
+        $perPage  = (int) $request->input('per_page', 15);
+        $checkIn  = $request->input('check_in');
+        $checkOut = $request->input('check_out');
+        $guests   = (int) $request->input('guests');
+        $now      = now();
+
+        // Sub-query: cheapest valid offer price per property.
+        $cheapestOfferId = DB::table('offers')
+            ->select('offers.property_id', DB::raw('MIN(offers.price) as min_price'))
+            ->whereDate('offers.check_in', $checkIn)
+            ->whereDate('offers.check_out', $checkOut)
+            ->where('offers.max_guests', '>=', $guests)
+            ->where('offers.available_units', '>', 0)
+            ->where('offers.expires_at', '>', $now)
+            ->groupBy('offers.property_id');
 
         $query = DB::table('properties')
-            ->join('offers', 'offers.property_id', '=', 'properties.id')
+            ->joinSub($cheapestOfferId, 'cheapest', function ($join) {
+                $join->on('cheapest.property_id', '=', 'properties.id');
+            })
+            ->join('offers', function ($join) use ($checkIn, $checkOut, $guests, $now) {
+                $join->on('offers.property_id', '=', 'properties.id')
+                    ->on('offers.price', '=', 'cheapest.min_price')
+                    ->whereDate('offers.check_in', $checkIn)
+                    ->whereDate('offers.check_out', $checkOut)
+                    ->where('offers.max_guests', '>=', $guests)
+                    ->where('offers.available_units', '>', 0)
+                    ->where('offers.expires_at', '>', $now);
+            })
             ->join('suppliers', 'suppliers.id', '=', 'offers.supplier_id')
-            ->where('offers.check_in', $request->input('check_in'))
-            ->where('offers.check_out', $request->input('check_out'))
-            ->where('offers.max_guests', '>=', $request->input('guests'))
-            ->where('offers.available_units', '>', 0)
-            ->where('offers.expires_at', '>', now())
             ->when($request->filled('city'), fn ($q) =>
                 $q->where('properties.city', $request->input('city'))
             )
-            // Rank offers per property by price ascending
-            ->selectRaw('properties.id as property_id')
-            ->selectRaw('properties.code, properties.name, properties.city')
-            ->selectRaw('offers.id as best_offer_id')
-            ->selectRaw('suppliers.slug as best_offer_supplier_slug')
-            ->selectRaw('offers.price as best_offer_price')
-            ->selectRaw('offers.currency as best_offer_currency')
-            ->selectRaw('offers.available_units as best_offer_available_units')
-            ->selectRaw('offers.expires_at as best_offer_expires_at')
-            ->selectRaw('ROW_NUMBER() OVER (PARTITION BY properties.id ORDER BY offers.price ASC, offers.id ASC) as rn')
+            ->select([
+                'properties.code',
+                'properties.name',
+                'properties.city',
+                'offers.id as best_offer_id',
+                'suppliers.slug as best_offer_supplier_slug',
+                'offers.price as best_offer_price',
+                'offers.currency as best_offer_currency',
+                'offers.available_units as best_offer_available_units',
+                'offers.expires_at as best_offer_expires_at',
+            ])
+            ->orderBy('offers.id')
             ->orderBy('properties.code');
 
-        // Wrap in a subquery so we can filter rn = 1 in SQL, not PHP
-        $ranked = DB::query()->fromSub($query, 'ranked')
-            ->where('rn', 1)
-            ->orderBy('code');
-
-        $paginator = $ranked->paginate($perPage);
+        $paginator = $query->paginate($perPage);
 
         return new PropertyCollection($paginator);
     }
