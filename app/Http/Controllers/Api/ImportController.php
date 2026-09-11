@@ -8,7 +8,7 @@ use App\Jobs\ProcessImport;
 use App\Models\Import;
 use App\Models\Supplier;
 use Illuminate\Http\JsonResponse;
-
+use App\Http\Resources\ImportResource;
 class ImportController extends Controller
 {
     public function store(StoreImportRequest $request): JsonResponse
@@ -39,5 +39,11 @@ class ImportController extends Controller
                 'status' => $import->status,
             ],
         ], 202);
+    }
+    public function show(Import $import): ImportResource
+    {
+        $import->loadMissing('supplier');
+
+        return new ImportResource($import);
     }
 }

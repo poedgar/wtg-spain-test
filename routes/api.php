@@ -9,3 +9,4 @@ Route::get('/user', function (Request $request) {
 })->middleware('auth:sanctum');
 
 Route::post('/imports', [ImportController::class, 'store']);
+Route::get('/imports/{import}', [ImportController::class, 'show']);
